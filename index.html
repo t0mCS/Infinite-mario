@@ -624,8 +624,16 @@
 
         function handleInput() {
             player.velocityX = 0;
-            if (keys['ArrowLeft'] || touchControls.left) player.velocityX = -MOVEMENT_SPEED;
-            if (keys['ArrowRight'] || touchControls.right) player.velocityX = MOVEMENT_SPEED;
+            // Handle horizontal movement with priority to keyboard
+            if (keys['ArrowLeft']) {
+                player.velocityX = -MOVEMENT_SPEED;
+            } else if (keys['ArrowRight']) {
+                player.velocityX = MOVEMENT_SPEED;
+            } else if (touchControls.left) {
+                player.velocityX = -MOVEMENT_SPEED;
+            } else if (touchControls.right) {
+                player.velocityX = MOVEMENT_SPEED;
+            }
             if (keys[' '] || touchControls.jump) {
                 if (player.onGround) {
                     player.velocityY = JUMP_VELOCITY;
