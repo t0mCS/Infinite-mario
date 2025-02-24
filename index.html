@@ -126,7 +126,8 @@
         const TILE_SIZE = 32;
         const GRAVITY = 0.5;
         const JUMP_VELOCITY = -12;
-        const MOVEMENT_SPEED = 5;
+        const KEYBOARD_MOVEMENT_SPEED = 5;
+        const MOBILE_MOVEMENT_SPEED = 3; // Slower speed for mobile controls
         const FPS = 60;
         const CHUNK_WIDTH = 30;
         const SCORE_PER_PIXEL = 0.1;
@@ -624,15 +625,15 @@
 
         function handleInput() {
             player.velocityX = 0;
-            // Handle horizontal movement with priority to keyboard
+            // Handle horizontal movement with different speeds for keyboard and touch
             if (keys['ArrowLeft']) {
-                player.velocityX = -MOVEMENT_SPEED;
+                player.velocityX = -KEYBOARD_MOVEMENT_SPEED;
             } else if (keys['ArrowRight']) {
-                player.velocityX = MOVEMENT_SPEED;
+                player.velocityX = KEYBOARD_MOVEMENT_SPEED;
             } else if (touchControls.left) {
-                player.velocityX = -MOVEMENT_SPEED;
+                player.velocityX = -MOBILE_MOVEMENT_SPEED;
             } else if (touchControls.right) {
-                player.velocityX = MOVEMENT_SPEED;
+                player.velocityX = MOBILE_MOVEMENT_SPEED;
             }
             if (keys[' '] || touchControls.jump) {
                 if (player.onGround) {
@@ -646,7 +647,7 @@
                     if (pushingAwayFromWall) {
                         // Wall jump
                         player.velocityY = JUMP_VELOCITY * 0.8; // Slightly lower jump
-                        player.velocityX = player.wallDirection * -MOVEMENT_SPEED * 1.5; // Boost away from wall
+                        player.velocityX = player.wallDirection * -KEYBOARD_MOVEMENT_SPEED * 1.5; // Boost away from wall
                         player.wallJumpCooldown = 200; // Prevent immediate re-wall-jump
                     }
                 }
@@ -654,9 +655,9 @@
             // Handle flight movement
             if (player.hasFlight && player.flightTimer > 0) {
                 if (keys[' '] || keys['ArrowUp'] || touchControls.jump) {
-                    player.velocityY = -MOVEMENT_SPEED;
+                    player.velocityY = -(keys[' '] || keys['ArrowUp'] ? KEYBOARD_MOVEMENT_SPEED : MOBILE_MOVEMENT_SPEED);
                 } else if (keys['Shift'] || keys['ArrowDown'] || touchControls.down) {
-                    player.velocityY = MOVEMENT_SPEED;
+                    player.velocityY = (keys['Shift'] || keys['ArrowDown'] ? KEYBOARD_MOVEMENT_SPEED : MOBILE_MOVEMENT_SPEED);
                 } else {
                     player.velocityY = 0; // Hover when no key is pressed
                 }
