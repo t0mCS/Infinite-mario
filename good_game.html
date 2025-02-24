@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Infinite Mario Web</title>
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #2c3e50;
+        }
+        canvas {
+            border: 2px solid #34495e;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas" width="800" height="480"></canvas>
+    <script>
+        // Constants
+        const SCREEN_WIDTH = 800;
+        const SCREEN_HEIGHT = 480;
+        const TILE_SIZE = 32;
+        const GRAVITY = 0.5;
+        const JUMP_VELOCITY = -12;
+        const MOVEMENT_SPEED = 5;
+        const FPS = 60;
+        const CHUNK_WIDTH = 30;
+        const SCORE_PER_PIXEL = 0.1;
+        const FLIGHT_DURATION = 5000;
+        const FIREBALL_SPEED = 10;
+        const FIREBALL_COOLDOWN = 500;
+
+        // Colors
+        const BLACK = '#000000';
+        const RED = '#FF0000';
+        const ORANGE = '#FFA500';
+        const WHITE = '#FFFFFF';
+        const CYAN = '#00FFFF';
+        const BROWN = '#8B4513';
+        const GRAY = '#A9A9A9';
+        const BLUE = '#0000FF';
+        const YELLOW = '#FFFF00';
+        const PURPLE = '#800080';
+        const SKY_BLUE = '#87CEEB';
+        const WAVE_GREEN1 = '#228B22';
+        const WAVE_GREEN2 = '#32CD32';
+        const WAVE_GREEN3 = '#90EE90';
+
+        // Game setup
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        let lastTime = 0;
+        let deltaTime = 0;
+
+        // Game state
+        let score = 0;
+        let cameraX = 0;
+        let gameRunning = true;
+        let level;
+        let player;
+
+        class Particle {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                this.color = color;
+                this.size = TILE_SIZE / 4;
+                this.velocityX = (Math.random() - 0.5) * 10;
+                this.velocityY = (Math.random() - 0.5) * 10 - 5;
+                this.gravity = 0.5;
+                this.life = 1.0; // Full opacity
+                this.fadeSpeed = 0.02;
+            }
+
+            update() {
+                this.x += this.velocityX;
+                this.y += this.velocityY;
+                this.velocityY += this.gravity;
+                this.life -= this.fadeSpeed;
+                return this.life > 0;
+            }
+
+            draw() {
+                ctx.fillStyle = `rgba(${this.color}, ${this.life})`;
+                ctx.fillRect(this.x - cameraX, this.y, this.size, this.size);
+            }
+        }
+
+        class Tile {
+            constructor(x, y, type) {
+                this.rect = {x, y, width: TILE_SIZE, height: TILE_SIZE};
+                this.type = type;
+                this.color = type === "ground" ? BROWN : type === "platform" ? GRAY : YELLOW;
+            }
+
+            draw() {
+                ctx.fillStyle = this.color;
+                ctx.fillRect(this.rect.x - cameraX, this.rect.y, TILE_SIZE, TILE_SIZE);
+            }
+        }
+
+        class Player {
+            constructor(x, y) {
+                this.rect = {x, y, width: TILE_SIZE, height: TILE_SIZE * 2};
+                this.velocityX = 0;
+                this.velocityY = 0;
+                this.onGround = false;
+                this.onWall = false;
+                this.wallDirection = 0; // -1 for left wall, 1 for right wall
+                this.wallJumpCooldown = 0;
+                this.lastX = x;
+                this.hasFireball = false;
+                this.shieldCount = 0; // 0 = no shield, 1 = one shield, 2 = two shields
+                this.hasUsedHoleRevive = false; // Track if hole revival has been used
+                this.hasFlight = false;
+                this.flightTimer = 0;
+                this.fireballCooldown = 0;
+            }
+
+            update() {
+                if (!(this.hasFlight && this.flightTimer > 0)) {
+                    this.velocityY += GRAVITY;
+                } else if (this.flightTimer > 0) {
+                    this.flightTimer -= deltaTime;
+                    if (this.flightTimer <= 0) {
+                        this.hasFlight = false;
+                    }
+                }
+
+                this.rect.x += this.velocityX;
+                if (this.rect.x < 0) {
+                    this.rect.x = 0;
+                    this.velocityX = 0;
+                }
+
+                // Wall detection and collision
+                this.onWall = false;
+                this.wallDirection = 0;
+                level.tiles.forEach(tile => {
+                    if (tile.type !== "item_box" && this.checkCollision(tile.rect)) {
+                        if (this.velocityX > 0) {
+                            this.rect.x = tile.rect.x - this.rect.width;
+                            this.onWall = true;
+                            this.wallDirection = 1;
+                        } else if (this.velocityX < 0) {
+                            this.rect.x = tile.rect.x + tile.rect.width;
+                            this.onWall = true;
+                            this.wallDirection = -1;
+                        }
+                    }
+                });
+
+                if (this.wallJumpCooldown > 0) {
+                    this.wallJumpCooldown -= deltaTime;
+                }
+
+                this.rect.y += this.velocityY;
+                this.onGround = false;
+
+                // Item box collisions
+                level.tiles = level.tiles.filter(tile => {
+                    if (tile.type === "item_box" && this.checkCollision(tile.rect)) {
+                        if (this.velocityY < 0 && Math.abs(this.rect.y - (tile.rect.y + tile.rect.height)) < 10) {
+                            const powerUp = ["fireball", "shield", "flight"][Math.floor(Math.random() * 3)];
+                            this.hasFireball = (powerUp === "fireball");
+                            if (powerUp === "shield") {
+                                this.shieldCount = 2; // Start with 2 shields
+                                this.hasUsedHoleRevive = false; // Reset hole revival on new shield
+                            }
+                            this.hasFlight = (powerUp === "flight");
+                            if (this.hasFlight) {
+                                this.flightTimer = FLIGHT_DURATION;
+                            }
+
+                            // Create particles
+                            const numParticles = 12;
+                            const color = "255, 215, 0"; // Golden color
+                            for (let i = 0; i < numParticles; i++) {
+                                level.particles.push(new Particle(tile.rect.x + TILE_SIZE/2, tile.rect.y + TILE_SIZE/2, color));
+                            }
+
+                            score += 500;
+                            this.velocityY = 0;
+                            return false;
+                        }
+                    }
+                    return true;
+                });
+
+                // Ground and platform collisions
+                level.tiles.forEach(tile => {
+                    if (tile.type !== "item_box" && this.checkCollision(tile.rect)) {
+                        if (this.velocityY > 0) {
+                            this.rect.y = tile.rect.y - this.rect.height;
+                            this.velocityY = 0;
+                            this.onGround = true;
+                        } else if (this.velocityY < 0) {
+                            this.rect.y = tile.rect.y + tile.rect.height;
+                            this.velocityY = 0;
+                        }
+                    }
+                });
+
+                if (this.fireballCooldown > 0) {
+                    this.fireballCooldown -= deltaTime;
+                }
+            }
+
+            draw() {
+                let color = RED;
+                if (this.hasFireball) color = ORANGE;
+                else if (this.shieldCount > 0) color = this.shieldCount === 2 ? WHITE : '#FFC0C0'; // Pink-white for one shield
+                else if (this.hasFlight && this.flightTimer > 0) color = CYAN;
+                
+                ctx.fillStyle = color;
+                ctx.fillRect(this.rect.x - cameraX, this.rect.y, this.rect.width, this.rect.height);
+            }
+
+            checkCollision(rect) {
+                return this.rect.x < rect.x + rect.width &&
+                       this.rect.x + this.rect.width > rect.x &&
+                       this.rect.y < rect.y + rect.height &&
+                       this.rect.y + this.rect.height > rect.y;
+            }
+
+            shootFireball() {
+                if (this.hasFireball && this.fireballCooldown <= 0) {
+                    this.fireballCooldown = FIREBALL_COOLDOWN;
+                    return new Fireball(this.rect.x + this.rect.width, this.rect.y + this.rect.height/2, FIREBALL_SPEED);
+                }
+                return null;
+            }
+        }
+
+        class Fireball {
+            constructor(x, y, speed) {
+                this.rect = {
+                    x: x,
+                    y: y - TILE_SIZE/4,
+                    width: TILE_SIZE/2,
+                    height: TILE_SIZE/2
+                };
+                this.velocityX = speed;
+            }
+
+            update() {
+                this.rect.x += this.velocityX;
+                return level.tiles.some(tile => this.checkCollision(tile.rect));
+            }
+
+            draw() {
+                ctx.fillStyle = PURPLE;
+                ctx.fillRect(this.rect.x - cameraX, this.rect.y, this.rect.width, this.rect.height);
+            }
+
+            checkCollision(rect) {
+                return this.rect.x < rect.x + rect.width &&
+                       this.rect.x + this.rect.width > rect.x &&
+                       this.rect.y < rect.y + rect.height &&
+                       this.rect.y + this.rect.height > rect.y;
+            }
+        }
+
+        class Goomba {
+            constructor(x, y, baseSpeed) {
+                this.rect = {x, y, width: TILE_SIZE, height: TILE_SIZE};
+                this.velocityX = -baseSpeed;
+            }
+
+            update() {
+                this.rect.x += this.velocityX;
+                level.tiles.forEach(tile => {
+                    if (this.checkCollision(tile.rect)) {
+                        if (this.velocityX > 0) {
+                            this.rect.x = tile.rect.x - this.rect.width;
+                            this.velocityX = -Math.abs(this.velocityX);
+                        } else if (this.velocityX < 0) {
+                            this.rect.x = tile.rect.x + tile.rect.width;
+                            this.velocityX = Math.abs(this.velocityX);
+                        }
+                    }
+                });
+            }
+
+            draw() {
+                ctx.fillStyle = BLUE;
+                ctx.fillRect(this.rect.x - cameraX, this.rect.y, TILE_SIZE, TILE_SIZE);
+            }
+
+            checkCollision(rect) {
+                return this.rect.x < rect.x + rect.width &&
+                       this.rect.x + this.rect.width > rect.x &&
+                       this.rect.y < rect.y + rect.height &&
+                       this.rect.y + this.rect.height > rect.y;
+            }
+        }
+
+        class Level {
+            constructor() {
+                this.tiles = [];
+                this.goombas = [];
+                this.fireballs = [];
+                this.particles = [];
+                this.lastGeneratedX = 0;
+                this.chunkWidth = CHUNK_WIDTH * TILE_SIZE;
+                this.generateChunk(0);
+            }
+
+            generateChunk(startX) {
+                const [chunkTiles, chunkGoombas] = this.createChunk(startX);
+                this.tiles.push(...chunkTiles);
+                this.goombas.push(...chunkGoombas);
+                this.lastGeneratedX = startX + this.chunkWidth;
+            }
+
+            createChunk(startX) {
+                const chunkTiles = [];
+                const chunkGoombas = [];
+                const GROUND_Y = SCREEN_HEIGHT - TILE_SIZE * 3;
+
+                const difficultyFactor = startX / (SCREEN_WIDTH * 10);
+                const gapChance = Math.min(0.03 + difficultyFactor * 0.02, 0.15);
+                const maxGapSize = Math.min(3 + Math.floor(difficultyFactor), 5);
+                const goombaChanceGround = Math.min(0.01 + difficultyFactor * 0.02, 0.1);
+                const goombaChancePlatform = Math.min(0.05 + difficultyFactor * 0.03, 0.2);
+                const maxPlatformHeight = Math.min(4 + Math.floor(difficultyFactor), 7);
+                const goombaSpeed = Math.min(2 + difficultyFactor * 0.5, 5);
+
+                if (startX === 0) {
+                    // Fill ground and everything below it
+                    for (let i = 0; i < CHUNK_WIDTH; i++) {
+                        const x = startX + i * TILE_SIZE;
+                        // Fill from bottom of screen up to ground level
+                        for (let y = SCREEN_HEIGHT; y > GROUND_Y; y -= TILE_SIZE) {
+                            chunkTiles.push(new Tile(x, y - TILE_SIZE, "ground"));
+                        }
+                    }
+                    chunkTiles.push(new Tile(startX + TILE_SIZE * 5, GROUND_Y - TILE_SIZE * 4, "item_box"));
+                    return [chunkTiles, chunkGoombas];
+                }
+
+                let inGap = false;
+                let gapRemaining = 0;
+
+                for (let i = 0; i < CHUNK_WIDTH; i++) {
+                    const x = startX + i * TILE_SIZE;
+                    // Check if we should create a gap
+                    if (!inGap && Math.random() < gapChance) {
+                        inGap = true;
+                        gapRemaining = Math.floor(Math.random() * (maxGapSize - 2)) + 2; // Ensure minimum 2 block gap
+                    }
+
+                    // If not in a gap, fill the entire column
+                    if (!inGap) {
+                        // Fill from bottom of screen up to ground level
+                        for (let y = SCREEN_HEIGHT; y > GROUND_Y; y -= TILE_SIZE) {
+                            chunkTiles.push(new Tile(x, y - TILE_SIZE, "ground"));
+                        }
+                        if (Math.random() < goombaChanceGround) {
+                            // Chance for vertical pair increases with difficulty
+                            const verticalPairChance = Math.min(0.2 + difficultyFactor * 0.1, 0.5);
+                            if (Math.random() < verticalPairChance) {
+                                // Spawn vertical pair
+                                chunkGoombas.push(new Goomba(x, GROUND_Y - TILE_SIZE, goombaSpeed));
+                                chunkGoombas.push(new Goomba(x, GROUND_Y - TILE_SIZE * 2, goombaSpeed));
+                            } else {
+                                // Spawn single goomba
+                                chunkGoombas.push(new Goomba(x, GROUND_Y - TILE_SIZE, goombaSpeed));
+                            }
+                        }
+                    }
+
+                    // Update gap status
+                    if (inGap && gapRemaining > 0) {
+                        gapRemaining--;
+                    } else if (inGap) {
+                        inGap = false;
+                    }
+                }
+
+                for (let i = 0; i < CHUNK_WIDTH; i += 10) {
+                    if (Math.random() < 0.5) {
+                        const platformX = startX + i * TILE_SIZE;
+                        const platformY = GROUND_Y - TILE_SIZE * Math.floor(Math.random() * maxPlatformHeight + 2);
+                        const platformLength = Math.floor(Math.random() * 3) + 3;
+                        
+                        for (let j = 0; j < platformLength; j++) {
+                            const tileX = platformX + j * TILE_SIZE;
+                            if (tileX < startX + this.chunkWidth) {
+                                chunkTiles.push(new Tile(tileX, platformY, "platform"));
+                                if (Math.random() < goombaChancePlatform) {
+                                    // Chance for vertical pair increases with difficulty
+                                    const verticalPairChance = Math.min(0.2 + difficultyFactor * 0.1, 0.5);
+                                    if (Math.random() < verticalPairChance) {
+                                        // Spawn vertical pair
+                                        chunkGoombas.push(new Goomba(tileX, platformY - TILE_SIZE, goombaSpeed));
+                                        chunkGoombas.push(new Goomba(tileX, platformY - TILE_SIZE * 2, goombaSpeed));
+                                    } else {
+                                        // Spawn single goomba
+                                        chunkGoombas.push(new Goomba(tileX, platformY - TILE_SIZE, goombaSpeed));
+                                    }
+                                }
+                            }
+                        }
+                        
+                        if (Math.random() < 0.1) {
+                            chunkTiles.push(new Tile(platformX + TILE_SIZE, platformY - TILE_SIZE * 4, "item_box"));
+                        }
+                    }
+                }
+
+                return [chunkTiles, chunkGoombas];
+            }
+
+            update() {
+                this.tiles = this.tiles.filter(tile => tile.rect.x + tile.rect.width > cameraX - SCREEN_WIDTH);
+                this.goombas = this.goombas.filter(goomba => goomba.rect.x + goomba.rect.width > cameraX - SCREEN_WIDTH);
+                this.fireballs = this.fireballs.filter(fb => {
+                    if (fb.rect.x < cameraX + SCREEN_WIDTH && !fb.update()) {
+                        return true;
+                    }
+                    return false;
+                });
+                this.particles = this.particles.filter(particle => particle.update());
+            }
+
+            draw() {
+                this.tiles.forEach(tile => tile.draw());
+                this.goombas.forEach(goomba => goomba.draw());
+                this.fireballs.forEach(fireball => fireball.draw());
+                this.particles.forEach(particle => particle.draw());
+            }
+        }
+
+        // Reset game state
+        function resetGame() {
+            score = 0;
+            cameraX = 0;
+            gameRunning = true;
+            level = new Level();
+            player = new Player(TILE_SIZE * 2, SCREEN_HEIGHT - TILE_SIZE * 5);
+            lastTime = 0;
+        }
+
+        // Input handling
+        const keys = {};
+        document.addEventListener('keydown', (e) => {
+            keys[e.key] = true;
+            if (e.key === 'f') {
+                const fireball = player.shootFireball();
+                if (fireball) level.fireballs.push(fireball);
+            }
+        });
+        document.addEventListener('keyup', (e) => {
+            keys[e.key] = false;
+        });
+
+        function handleInput() {
+            player.velocityX = 0;
+            if (keys['ArrowLeft']) player.velocityX = -MOVEMENT_SPEED;
+            if (keys['ArrowRight']) player.velocityX = MOVEMENT_SPEED;
+            if (keys[' ']) {
+                if (player.onGround) {
+                    player.velocityY = JUMP_VELOCITY;
+                } else if (player.onWall && player.wallJumpCooldown <= 0) {
+                    // Check if pressing in opposite direction of wall
+                    const pushingAwayFromWall = 
+                        (player.wallDirection > 0 && keys['ArrowLeft']) || // Right wall, pressing left
+                        (player.wallDirection < 0 && keys['ArrowRight']); // Left wall, pressing right
+                    
+                    if (pushingAwayFromWall) {
+                        // Wall jump
+                        player.velocityY = JUMP_VELOCITY * 0.8; // Slightly lower jump
+                        player.velocityX = player.wallDirection * -MOVEMENT_SPEED * 1.5; // Boost away from wall
+                        player.wallJumpCooldown = 200; // Prevent immediate re-wall-jump
+                    }
+                }
+            }
+            // Handle flight movement
+            if (player.hasFlight && player.flightTimer > 0) {
+                if (keys[' '] || keys['ArrowUp']) {
+                    player.velocityY = -MOVEMENT_SPEED;
+                } else if (keys['Shift'] || keys['ArrowDown']) {
+                    player.velocityY = MOVEMENT_SPEED;
+                } else {
+                    player.velocityY = 0; // Hover when no key is pressed
+                }
+            }
+        }
+
+        function drawBackground() {
+            // Sky
+            ctx.fillStyle = SKY_BLUE;
+            ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+
+            // Waves with parallax
+            const waveTime = performance.now() / 1000;
+            const waveColors = [WAVE_GREEN1, WAVE_GREEN2, WAVE_GREEN3];
+            
+            for (let i = 2; i >= 0; i--) {
+                const waveColor = waveColors[i];
+                const waveHeight = SCREEN_HEIGHT - 100 - (i * 120);
+                const waveAmplitude = 50 - (i * 10);
+                const waveFrequency = 0.02 + (i * 0.01);
+                const waveSpeed = 0.5 + (i * 0.2);
+                const waveOffset = cameraX * (0.2 + i * 0.1);
+
+                ctx.beginPath();
+                ctx.moveTo(0, SCREEN_HEIGHT);
+                
+                for (let x = 0; x <= SCREEN_WIDTH; x += 10) {
+                    const y = waveHeight + waveAmplitude * 
+                        Math.sin((x + waveOffset) * waveFrequency + waveTime * waveSpeed);
+                    ctx.lineTo(x, y);
+                }
+                
+                ctx.lineTo(SCREEN_WIDTH, SCREEN_HEIGHT);
+                ctx.closePath();
+                
+                ctx.fillStyle = waveColor;
+                ctx.fill();
+            }
+        }
+
+        function drawHUD() {
+            ctx.fillStyle = WHITE;
+            ctx.font = '24px Arial';
+            ctx.fillText(`Score: ${Math.floor(score)}`, 10, 30);
+            const powerText = player.hasFlight ? 'Flight' :
+                            player.hasFireball ? 'Fireball' :
+                            player.hasShield ? 'Shield' : 'None';
+            ctx.fillText(`Power: ${powerText}`, 350, 30);
+            
+            if (player.hasFlight && player.flightTimer > 0) {
+                ctx.fillText(`Flight Time: ${(player.flightTimer / 1000).toFixed(1)}s`, 550, 30);
+            }
+        }
+
+        function gameLoop(timestamp) {
+            if (!lastTime) lastTime = timestamp;
+            deltaTime = timestamp - lastTime;
+            lastTime = timestamp;
+
+            if (!gameRunning) {
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+                ctx.fillStyle = WHITE;
+                ctx.font = '48px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText('Game Over!', SCREEN_WIDTH/2, SCREEN_HEIGHT/2);
+                ctx.font = '24px Arial';
+                ctx.fillText(`Final Score: ${Math.floor(score)}`, SCREEN_WIDTH/2, SCREEN_HEIGHT/2 + 40);
+                ctx.font = '20px Arial';
+                ctx.fillText('Press Ctrl + R to Restart!', SCREEN_WIDTH/2, SCREEN_HEIGHT/2 + 80);
+                return;
+            }
+
+            handleInput();
+            player.update();
+            level.goombas.forEach(goomba => goomba.update());
+
+            if (player.rect.x > level.lastGeneratedX - SCREEN_WIDTH) {
+                level.generateChunk(level.lastGeneratedX);
+            }
+
+            cameraX = Math.max(0, player.rect.x - SCREEN_WIDTH/2);
+
+            if (player.rect.x > player.lastX) {
+                score += (player.rect.x - player.lastX) * SCORE_PER_PIXEL;
+            }
+            player.lastX = player.rect.x;
+
+            level.update();
+
+            // Collisions
+            level.goombas.forEach((goomba, index) => {
+                if (player.checkCollision(goomba.rect)) {
+                    if (player.velocityY > 0 && player.rect.y + player.rect.height - goomba.rect.y <= 10) {
+                        // Create upward shooting particles on goomba kill
+                        const numParticles = 8;
+                        const color = "0, 0, 255"; // Blue color
+                        for (let i = 0; i < numParticles; i++) {
+                            const particle = new Particle(goomba.rect.x + TILE_SIZE/2, goomba.rect.y + TILE_SIZE/2, color);
+                            // Override default particle physics for more upward momentum
+                            particle.velocityX = (Math.random() - 0.5) * 15; // Wider spread
+                            particle.velocityY = -Math.random() * 15 - 5; // Strong upward boost
+                            particle.gravity = 0.8; // Faster fall
+                            particle.fadeSpeed = 0.03; // Faster fade
+                            level.particles.push(particle);
+                        }
+                        level.goombas.splice(index, 1);
+                        score += 100;
+                    } else if (player.shieldCount > 0) {
+                        player.shieldCount--; // Reduce shield count
+                        level.goombas.splice(index, 1);
+                    } else {
+                        gameRunning = false;
+                    }
+                }
+            });
+
+            level.fireballs.forEach((fireball, fbIndex) => {
+                level.goombas.forEach((goomba, goombaIndex) => {
+                    if (fireball.checkCollision(goomba.rect)) {
+                        // Create explosion particles on fireball kill
+                        const numParticles = 8;
+                        const color = "0, 0, 255"; // Blue color
+                        for (let i = 0; i < numParticles; i++) {
+                            const particle = new Particle(goomba.rect.x + TILE_SIZE/2, goomba.rect.y + TILE_SIZE/2, color);
+                            // Override default particle physics for explosion effect
+                            const angle = (Math.PI * 2 * i) / numParticles; // Spread particles in a circle
+                            const speed = 10;
+                            particle.velocityX = Math.cos(angle) * speed;
+                            particle.velocityY = Math.sin(angle) * speed;
+                            particle.gravity = 0.8;
+                            particle.fadeSpeed = 0.03;
+                            level.particles.push(particle);
+                        }
+                        level.goombas.splice(goombaIndex, 1);
+                        level.fireballs.splice(fbIndex, 1);
+                        score += 100;
+                    }
+                });
+            });
+
+            if (player.rect.y > SCREEN_HEIGHT) {
+                if (player.shieldCount > 0 && !player.hasUsedHoleRevive) {
+                    // Revive player on right side of hole
+                    player.rect.x = Math.max(player.rect.x + TILE_SIZE * 3, cameraX + SCREEN_WIDTH/2);
+                    player.rect.y = SCREEN_HEIGHT - TILE_SIZE * 5;
+                    player.velocityY = 0;
+                    player.velocityX = 0;
+                    player.shieldCount--;
+                    player.hasUsedHoleRevive = true; // Mark hole revival as used
+                } else {
+                    gameRunning = false;
+                }
+            }
+
+            // Render
+            drawBackground();
+            level.draw();
+            player.draw();
+            drawHUD();
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Start the game
+        resetGame();
+        requestAnimationFrame(gameLoop);
+    </script>
+</body>
+</html>
