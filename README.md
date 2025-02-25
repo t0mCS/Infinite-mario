@@ -39,12 +39,8 @@ A browser-based infinite runner platformer game inspired by classic Mario-style 
 
 Contributions are welcome! If you'd like to modify or enhance the game, feel free to fork the repository and submit a pull request.
 
-## License
-
-[Insert License Here]
-
 ## Contact
 
-[Your Name] - [Your Email] - [Your Website]
+Thomas Stahura - tomcs333@gmail.com - gptez.com
 
 Feel free to reach out with suggestions or feedback!
